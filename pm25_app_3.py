@@ -230,32 +230,38 @@ def aqi_pill(val):
     label, css = pm25_to_aqi(val)
     return f'<span class="aqi-pill {css}">{label}</span>'
 
-# ─── Location Search (Nominatim) ─────────────────────────────────────────────
+# ─── Location Search (Open-Meteo Geocoding) ───────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def search_locations(query: str):
     if not query or len(query.strip()) < 2:
-        return []
+        return [], None
     try:
         resp = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={'q': query, 'format': 'json', 'limit': 7, 'addressdetails': 1},
-            headers={'User-Agent': 'PM25-Estimator-App'},
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={'name': query.strip(), 'count': 7, 'language': 'en', 'format': 'json'},
             timeout=8
         )
         resp.raise_for_status()
         out = []
-        for r in resp.json():
-            parts = r['display_name'].split(',')
-            short = parts[0].strip() + ', ' + parts[-1].strip()
+        for r in resp.json().get('results', []):
+            name = r.get('name', '').strip()
+            admin1 = r.get('admin1', '').strip()
+            country = r.get('country', '').strip()
+            place_parts = [name]
+            if admin1 and admin1.casefold() != name.casefold():
+                place_parts.append(admin1)
+            if country:
+                place_parts.append(country)
+            display_name = ', '.join(part for part in place_parts if part)
             out.append({
-                'display_name': r['display_name'],
-                'short_name':   short,
-                'lat': float(r['lat']),
-                'lon': float(r['lon']),
+                'display_name': display_name,
+                'short_name':   display_name,
+                'lat': float(r['latitude']),
+                'lon': float(r['longitude']),
             })
-        return out
+        return out, None
     except Exception:
-        return []
+        return [], "Location search is temporarily unavailable. Please try again shortly."
 
 # ─── Real-Time Data (Current reading + 1 year history for model training) ────
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -460,7 +466,7 @@ with st.sidebar:
                 st.session_state.pop('selected_location', None)
                 selected_location = None
 
-            suggestions = search_locations(search_query)
+            suggestions, search_error = search_locations(search_query)
 
             if suggestions:
                 option_labels = [s['short_name'] for s in suggestions]
@@ -478,8 +484,10 @@ with st.sidebar:
                 if chosen != "Select a location ▾":
                     selected_location = option_map[chosen]
                     st.session_state['selected_location'] = selected_location
+            elif search_error:
+                st.warning(search_error)
             else:
-                st.caption("⚠️ No results found.")
+                st.caption("⚠️ No locations found. Try a different or more specific name.")
 
         # Show selected location confirmation
         if selected_location:
@@ -500,7 +508,7 @@ with st.sidebar:
             <b>Air Quality:</b> <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank">Open-Meteo Air Quality API</a><br>
             <b>Weather (recent):</b> <a href="https://open-meteo.com/en/docs" target="_blank">Open-Meteo Forecast API</a><br>
             <b>Weather (history):</b> <a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank">Open-Meteo Archive API</a><br>
-            <b>Location:</b> <a href="https://nominatim.openstreetmap.org" target="_blank">OpenStreetMap Nominatim</a><br>
+            <b>Location:</b> <a href="https://open-meteo.com/en/docs/geocoding-api" target="_blank">Open-Meteo Geocoding API (GeoNames)</a><br>
             <span style="color:#3fb950">Free · Open data · No API key · 1 year history</span>
         </div>""", unsafe_allow_html=True)
 
@@ -648,9 +656,9 @@ if 'data_loaded' not in st.session_state:
             <a href="https://open-meteo.com/en/docs">open-meteo.com/en/docs</a>
         </div>
         <div class="source-attribution">
-            <div class="src-title"> Geocoding — OpenStreetMap Nominatim</div>
-            Location search & coordinates<br>
-            <a href="https://nominatim.openstreetmap.org">nominatim.openstreetmap.org</a>
+            <div class="src-title"> Geocoding — Open-Meteo Geocoding API</div>
+            Location search & coordinates · GeoNames data<br>
+            <a href="https://open-meteo.com/en/docs/geocoding-api">open-meteo.com/en/docs/geocoding-api</a>
         </div>
         """, unsafe_allow_html=True)
 
@@ -728,7 +736,7 @@ if data_src_tag == 'realtime' and today_info and today_info['pm25'] is not None:
             <div class="src-title"> Data Sources</div>
              <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank">Open-Meteo Air Quality API</a><br>
              <a href="https://open-meteo.com/en/docs" target="_blank">Open-Meteo Weather API</a><br>
-             <a href="https://nominatim.openstreetmap.org" target="_blank">OpenStreetMap Nominatim</a><br>
+             <a href="https://open-meteo.com/en/docs/geocoding-api" target="_blank">Open-Meteo Geocoding API (GeoNames)</a><br>
             <span style="color:#3fb950;font-size:0.72rem">
             Fetched: {today_info['fetch_time']}</span>
         </div>""", unsafe_allow_html=True)
@@ -783,7 +791,7 @@ with tab_data:
             <a href="https://open-meteo.com/en/docs/air-quality-api">Open-Meteo Air Quality API</a> ·
             Weather (Temperature, Humidity, Wind) from
             <a href="https://open-meteo.com/en/docs">Open-Meteo Weather API</a> ·
-            Location geocoding by <a href="https://nominatim.openstreetmap.org">OpenStreetMap Nominatim</a> ·
+            Location geocoding by <a href="https://open-meteo.com/en/docs/geocoding-api">Open-Meteo Geocoding API (GeoNames)</a> ·
             <span style="color:#3fb950">All sources are free and open · No API key required</span>
         </div>""", unsafe_allow_html=True)
 
